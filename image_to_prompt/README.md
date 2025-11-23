@@ -1,0 +1,1 @@
+This directory is to generate prompts from still images of three.js animations. This is for the finetuning step, where we compare the generated three.js animation of our model and compare with the given prompt to see how accurate it is. 
