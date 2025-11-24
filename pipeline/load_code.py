@@ -6,12 +6,12 @@ import os
 import json
 
 
-def read_js_from_file(file_path: str = "input_gen_code.js") -> str:
+def read_js_from_file(file_path: str = "gen_code.js") -> str:
     """
     Read JavaScript code from a file.
     
     Args:
-        file_path: Path to the JavaScript file (default: "input_gen_code.js")
+        file_path: Path to the JavaScript file (default: "gen_code.js")
     
     Returns:
         The JavaScript code as a string
@@ -50,10 +50,21 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
         #canvas-container {{
             width: 100vw;
             height: 100vh;
+            position: relative;
         }}
         #myCanvas {{
             width: 100%;
             height: 100%;
+        }}
+        canvas {{
+            display: block;
+        }}
+        body > canvas {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
         }}
     </style>
 </head>
@@ -72,8 +83,61 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
             // Execute the user's code
             try {{
                 eval(userCode);
-                // Signal that rendering has started
-                window.threeJsRendered = true;
+                
+                // Post-process: If renderer created its own canvas and appended to body,
+                // ensure it's properly styled and visible
+                // Use requestAnimationFrame to ensure DOM is updated
+                requestAnimationFrame(() => {{
+                    requestAnimationFrame(() => {{
+                        const myCanvas = document.getElementById('myCanvas');
+                        const allCanvases = document.querySelectorAll('canvas');
+                        const container = document.getElementById('canvas-container');
+                        
+                        // Find canvas that's not myCanvas (created by renderer)
+                        let rendererCanvas = null;
+                        for (let canvas of allCanvases) {{
+                            if (canvas.id !== 'myCanvas') {{
+                                // Check if this canvas has WebGL context (created by renderer)
+                                const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
+                                if (gl !== null) {{
+                                    rendererCanvas = canvas;
+                                    break;
+                                }}
+                            }}
+                        }}
+                        
+                        if (rendererCanvas) {{
+                            // Hide the unused myCanvas
+                            if (myCanvas) {{
+                                myCanvas.style.display = 'none';
+                            }}
+                            
+                            // Move renderer canvas to container if not already there
+                            if (container && !container.contains(rendererCanvas)) {{
+                                container.appendChild(rendererCanvas);
+                            }}
+                            
+                            // Ensure canvas takes full size and is visible
+                            rendererCanvas.style.width = '100%';
+                            rendererCanvas.style.height = '100%';
+                            rendererCanvas.style.display = 'block';
+                            rendererCanvas.style.position = 'absolute';
+                            rendererCanvas.style.top = '0';
+                            rendererCanvas.style.left = '0';
+                            
+                            // Ensure container is positioned correctly
+                            container.style.position = 'relative';
+                            
+                            // Resize renderer to match viewport if needed
+                            if (window.renderer && typeof window.renderer.setSize === 'function') {{
+                                window.renderer.setSize(window.innerWidth, window.innerHeight);
+                            }}
+                        }}
+                        
+                        // Signal that rendering has started (after post-processing)
+                        window.threeJsRendered = true;
+                    }});
+                }});
             }} catch (e) {{
                 console.error('Error executing three.js code:', e);
                 window.threeJsRendered = true; // Still signal to continue
@@ -107,13 +171,33 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
             # Wait for the user's code to execute and rendering to start
             await page.wait_for_function('window.threeJsRendered === true', timeout=10000)
             
+            # Additional small wait to ensure post-processing completes
+            await asyncio.sleep(0.2)
+            
             # Wait for canvas element and WebGL context to be created
+            # Handle both cases: code using existing myCanvas or code creating its own canvas
             await page.wait_for_function('''
                 () => {{
-                    const canvas = document.getElementById('myCanvas');
-                    if (!canvas) return false;
-                    const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
-                    return gl !== null;
+                    // First check if myCanvas has WebGL context (for code that uses existing canvas)
+                    const myCanvas = document.getElementById('myCanvas');
+                    if (myCanvas) {{
+                        const gl = myCanvas.getContext('webgl') || myCanvas.getContext('webgl2');
+                        if (gl !== null) return true;
+                    }}
+                    
+                    // If myCanvas doesn't have WebGL, check for any canvas with WebGL context
+                    // (for code that creates its own canvas via renderer.domElement)
+                    const allCanvases = document.querySelectorAll('canvas');
+                    for (let canvas of allCanvases) {{
+                        const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
+                        if (gl !== null) {{
+                            // Ensure the canvas is visible and properly sized
+                            if (canvas.width > 0 && canvas.height > 0) {{
+                                return true;
+                            }}
+                        }}
+                    }}
+                    return false;
                 }}
             ''', timeout=10000)
             
@@ -140,8 +224,30 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
             # Additional wait to ensure animation has fully rendered
             await asyncio.sleep(wait_time)
             
+            # Verify canvas is visible before screenshot
+            await page.wait_for_function('''
+                () => {{
+                    const allCanvases = document.querySelectorAll('canvas');
+                    for (let canvas of allCanvases) {{
+                        const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
+                        if (gl !== null && canvas.width > 0 && canvas.height > 0) {{
+                            const rect = canvas.getBoundingClientRect();
+                            const style = window.getComputedStyle(canvas);
+                            // Check if canvas is visible
+                            if (rect.width > 0 && rect.height > 0 && 
+                                style.display !== 'none' && 
+                                style.visibility !== 'hidden' &&
+                                style.opacity !== '0') {{
+                                return true;
+                            }}
+                        }}
+                    }}
+                    return false;
+                }}
+            ''', timeout=5000)
+            
             # Take screenshot
-            await page.screenshot(path=output_path, type='jpeg', quality=90)
+            await page.screenshot(path=output_path, type='jpeg', quality=90, full_page=True)
             
             print(f"Screenshot saved to {output_path}")
             
@@ -167,9 +273,8 @@ def render_threejs(js_code: str, output_path: str = "test.jpg", wait_time: float
 
 
 if __name__ == "__main__":
-    # Read JavaScript code from input_gen_code.js
-    js_code = read_js_from_file("input_gen_code.js")
+    # Read JavaScript code from gen_code.js
+    js_code = read_js_from_file("gen_code.js")
     
     # Render and save screenshot
     render_threejs(js_code)
-
