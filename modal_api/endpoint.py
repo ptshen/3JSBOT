@@ -19,6 +19,37 @@ MODEL = os.environ.get("MODEL", "codellama:7b")
 DEFAULT_MODELS = ["codellama:7b"]
 
 
+def load_system_prompt() -> str:
+    """Load the system prompt from the markdown file.
+    
+    :return: System prompt content as string
+    """
+    from loguru import logger
+    
+    try:
+        # Try to read from the file in the container
+        prompt_path = "/root/system_prompt.md"
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r") as f:
+                content = f.read()
+                logger.info(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
+                return content
+        # Fallback: try current directory (for local development)
+        prompt_path = "system_prompt.md"
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r") as f:
+                content = f.read()
+                logger.info(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
+                return content
+        # If file doesn't exist, return default prompt
+        logger.warning("System prompt file not found, using default prompt")
+        return "You are a specialized JavaScript code generation assistant. Generate ONLY JavaScript code. Do not generate code in any other programming language."
+    except Exception as e:
+        # Fallback to default prompt if file can't be read
+        logger.error(f"Error loading system prompt: {e}")
+        return "You are a specialized JavaScript code generation assistant. Generate ONLY JavaScript code. Do not generate code in any other programming language."
+
+
 def pull() -> None:
     """Initialize and pull the Ollama model.
 
@@ -54,6 +85,45 @@ WantedBy=default.target
         f.write(service_content)
     subprocess.run(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "enable", "ollama"])
+
+
+def create_system_prompt_file() -> None:
+    """Create the system prompt file for JavaScript code generation."""
+    from loguru import logger
+    
+    system_prompt_content = """You are a JavaScript code generator. Your ONLY job is to output JavaScript code. Nothing else.
+
+CRITICAL RULES - YOU MUST FOLLOW THESE:
+1. Output ONLY JavaScript code. No explanations, no descriptions, no markdown code fences.
+2. Do NOT use markdown formatting like ```javascript or ```. Just output the raw code.
+3. Do NOT add any text before or after the code. No "Here's the code:" or "This code does X".
+4. If you need to explain something, use JavaScript comments (// or /* */) INSIDE the code.
+5. Do NOT generate code in any other language (Python, Java, C++, etc.). ONLY JavaScript.
+6. Output complete, runnable JavaScript code when possible.
+7. Use modern ES6+ JavaScript syntax and best practices.
+
+EXAMPLES OF CORRECT OUTPUT:
+// Good - just code with comments
+import * as THREE from 'three';
+const scene = new THREE.Scene();
+// ... rest of code
+
+EXAMPLES OF WRONG OUTPUT:
+❌ ```javascript
+   // code here
+   ```
+❌ Here's the code to create a sphere:
+   // code here
+❌ // code here
+   This code creates a 3D sphere...
+
+Remember: Output ONLY JavaScript code. No markdown, no explanations, no extra text. Just code.
+"""
+    import os
+    os.makedirs("/root", exist_ok=True)
+    with open("/root/system_prompt.md", "w") as f:
+        f.write(system_prompt_content)
+    logger.info(f"Created system prompt file at /root/system_prompt.md ({len(system_prompt_content)} chars)")
 
 
 def wait_for_ollama(timeout: int = 30, interval: int = 2) -> None:
@@ -94,10 +164,22 @@ image = (
     )
     .pip_install("ollama", "httpx", "loguru", "fastapi", "pydantic")
     .run_function(create_service_file)
+    .run_function(create_system_prompt_file)
     .run_function(pull)
 )
 app = modal.App(name="ollama", image=image)
 api = FastAPI()
+
+
+@api.get("/system-prompt")
+async def get_system_prompt():
+    """Debug endpoint to check if system prompt is loaded."""
+    prompt = load_system_prompt()
+    return {
+        "prompt_length": len(prompt),
+        "prompt_preview": prompt[:200] + "..." if len(prompt) > 200 else prompt,
+        "file_exists": os.path.exists("/root/system_prompt.md")
+    }
 
 
 class ChatMessage(BaseModel):
@@ -136,7 +218,6 @@ async def v1_chat_completions(request: ChatCompletionRequest) -> Any:
     :return: Chat completion response in OpenAI-compatible format, or StreamingResponse if streaming
     :raises HTTPException: If the request is invalid or processing fails
     """
-    import ollama  # Import here to ensure it's available in the Modal container
     import json
 
     try:
@@ -145,6 +226,50 @@ async def v1_chat_completions(request: ChatCompletionRequest) -> Any:
                 status_code=400,
                 detail="Messages array is required and cannot be empty",
             )
+
+        # Load system prompt and inject it into messages
+        import ollama
+        from loguru import logger
+        
+        system_prompt = load_system_prompt()
+        logger.info(f"System prompt loaded: {len(system_prompt)} characters")
+        
+        # Prepare messages with system prompt
+        messages = [msg.model_dump() for msg in request.messages]
+        
+        # Prepend system prompt to ensure it's always included
+        # We'll add it as both a system message AND prepend to first user message
+        # to ensure maximum compatibility with different Ollama versions
+        
+        # Find the first user message
+        first_user_idx = None
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "user":
+                first_user_idx = i
+                break
+        
+        if first_user_idx is not None:
+            # Prepend system prompt to the first user message
+            messages[first_user_idx]["content"] = system_prompt + "\n\nUser request: " + messages[first_user_idx].get("content", "")
+            logger.info(f"Prepended system prompt to user message at index {first_user_idx}")
+        else:
+            # If no user message found, prepend to first message
+            if messages:
+                messages[0]["content"] = system_prompt + "\n\n" + messages[0].get("content", "")
+            else:
+                # Insert as first message
+                messages.insert(0, {
+                    "role": "user",
+                    "content": system_prompt
+                })
+        
+        # Also add as system message for models that support it
+        messages.insert(0, {
+            "role": "system",
+            "content": system_prompt
+        })
+        
+        logger.info(f"Messages prepared with system prompt. Total messages: {len(messages)}, first role: {messages[0].get('role')}")
 
         if request.stream:
 
@@ -155,7 +280,7 @@ async def v1_chat_completions(request: ChatCompletionRequest) -> Any:
                 """
                 response = ollama.chat(
                     model=request.model,
-                    messages=[msg.model_dump() for msg in request.messages],
+                    messages=messages,
                     stream=True,
                 )
 
@@ -202,7 +327,7 @@ async def v1_chat_completions(request: ChatCompletionRequest) -> Any:
 
         # Non-streaming response
         response = ollama.chat(
-            model=request.model, messages=[msg.model_dump() for msg in request.messages]
+            model=request.model, messages=messages
         )
 
         return {
@@ -234,8 +359,8 @@ async def v1_chat_completions(request: ChatCompletionRequest) -> Any:
 
 
 @app.cls(
-    gpu="A10G",
-    scaledown_window=10,
+    gpu="A100",  # Options: "T4" (cheaper), "A10G" (current), "A100" (faster, more expensive)
+    scaledown_window=300,  # Keep container warm for 5 minutes (was 10 seconds) - reduces cold starts
 )
 class Ollama:
     """Modal container class for running Ollama service.
@@ -248,10 +373,27 @@ class Ollama:
         """Entry point for Modal container.
 
         Starts Ollama service and pulls the specified model.
+        Pre-warms the model by making a dummy request to load it into GPU memory.
         """
+        from loguru import logger
+        
         subprocess.run(["systemctl", "start", "ollama"])
         wait_for_ollama()
         subprocess.run(["ollama", "pull", MODEL])
+        
+        # Pre-warm the model by making a small request to load it into GPU memory
+        # This reduces latency for the first real request
+        try:
+            import ollama
+            logger.info("Pre-warming model...")
+            ollama.chat(
+                model=MODEL,
+                messages=[{"role": "user", "content": "// test"}],
+                options={"num_predict": 1}  # Generate only 1 token to minimize cost
+            )
+            logger.info("Model pre-warmed successfully")
+        except Exception as e:
+            logger.warning(f"Model pre-warming failed (non-critical): {e}")
 
     @modal.asgi_app()
     def serve(self):
