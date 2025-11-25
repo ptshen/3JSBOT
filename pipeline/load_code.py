@@ -116,7 +116,15 @@ window.THREE = {
     OBJLoader,
     FBXLoader,
     FontLoader,
-    TextGeometry
+    TextGeometry,
+    // Add aliases for deprecated BufferGeometry classes (for backwards compatibility)
+    BoxBufferGeometry: THREE.BoxGeometry,
+    SphereBufferGeometry: THREE.SphereGeometry,
+    PlaneBufferGeometry: THREE.PlaneGeometry,
+    CylinderBufferGeometry: THREE.CylinderGeometry,
+    ConeBufferGeometry: THREE.ConeGeometry,
+    TorusBufferGeometry: THREE.TorusGeometry,
+    TorusKnotBufferGeometry: THREE.TorusKnotGeometry
 };
 
 """
