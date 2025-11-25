@@ -1,32 +1,29 @@
 import * as THREE from 'three';
 
-const width = window.innerWidth, height = window.innerHeight;
-
-// init
-
-const camera = new THREE.PerspectiveCamera( 70, width / height, 0.01, 10 );
-camera.position.z = 1;
-
+// Create the scene and camera
 const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5;
 
-const geometry = new THREE.BoxGeometry( 0.2, 0.2, 0.2 );
-const material = new THREE.MeshNormalMaterial();
+// Create a teapot geometry and material
+const teapotGeometry = new THREE.TeapotBufferGeometry(1, 20, 20);
+const teapotMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const teapot = new THREE.Mesh(teapotGeometry, teapotMaterial);
+scene.add(teapot);
 
-const mesh = new THREE.Mesh( geometry, material );
-scene.add( mesh );
+// Create a light source and add it to the scene
+const pointLight = new THREE.PointLight(0xffffff, 1, 100, 2);
+pointLight.position.set(5, 5, 5);
+scene.add(pointLight);
 
-const renderer = new THREE.WebGLRenderer( { antialias: true } );
-renderer.setSize( width, height );
-renderer.setAnimationLoop( animate );
-document.body.appendChild( renderer.domElement );
+// Create a renderer and add it to the DOM
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-// animation
-
-function animate( time ) {
-
-	mesh.rotation.x = time / 10;
-	mesh.rotation.y = time / 1000;
-
-	renderer.render( scene, camera );
-
+// Start the animation loop
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
 }
+animate();

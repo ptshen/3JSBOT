@@ -1,32 +1,53 @@
 import * as THREE from 'three';
 
-const width = window.innerWidth, height = window.innerHeight;
+// Import common three.js addons
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TeapotGeometry } from 'three/examples/jsm/geometries/TeapotGeometry.js';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 
-// init
+// Make THREE globally available with addons by extending it
+window.THREE = {
+    ...THREE,
+    OrbitControls,
+    TeapotGeometry,
+    TeapotBufferGeometry: TeapotGeometry, // Alias for older code
+    RoundedBoxGeometry,
+    GLTFLoader,
+    OBJLoader,
+    FBXLoader,
+    FontLoader,
+    TextGeometry
+};
 
-const camera = new THREE.PerspectiveCamera( 70, width / height, 0.01, 10 );
-camera.position.z = 1;
+// Create the scene and camera
+const scene = new window.THREE.Scene();
+const camera = new window.THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5;
 
-const scene = new THREE.Scene();
+// Create a teapot geometry and material
+const teapotGeometry = new window.THREE.TeapotBufferGeometry(1, 20, 20);
+const teapotMaterial = new window.THREE.MeshBasicMaterial({ color: 0xffffff });
+const teapot = new window.THREE.Mesh(teapotGeometry, teapotMaterial);
+scene.add(teapot);
 
-const geometry = new THREE.BoxGeometry( 0.2, 0.2, 0.2 );
-const material = new THREE.MeshNormalMaterial();
+// Create a light source and add it to the scene
+const pointLight = new window.THREE.PointLight(0xffffff, 1, 100, 2);
+pointLight.position.set(5, 5, 5);
+scene.add(pointLight);
 
-const mesh = new THREE.Mesh( geometry, material );
-scene.add( mesh );
+// Create a renderer and add it to the DOM
+const renderer = new window.THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-const renderer = new THREE.WebGLRenderer( { antialias: true } );
-renderer.setSize( width, height );
-renderer.setAnimationLoop( animate );
-document.body.appendChild( renderer.domElement );
-
-// animation
-
-function animate( time ) {
-
-	mesh.rotation.x = time / 10;
-	mesh.rotation.y = time / 1000;
-
-	renderer.render( scene, camera );
-
+// Start the animation loop
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
 }
+animate();

@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 import signal
+import re
 
 
 def read_js_from_file(file_path: str = "gen_code.js") -> str:
@@ -23,6 +24,62 @@ def read_js_from_file(file_path: str = "gen_code.js") -> str:
     """
     with open(file_path, "r") as f:
         return f.read()
+
+
+def process_user_code(js_code: str) -> str:
+    """
+    Process user code to make it compatible with our environment.
+    
+    Args:
+        js_code: The raw JavaScript code from the user
+        
+    Returns:
+        Processed JavaScript code with imports removed
+    """
+    lines = js_code.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        # Skip import lines that import from 'three' (exact match)
+        if re.match(r'^\s*import\s+.*\s+from\s+[\'"]three[\'"]', line.strip()):
+            continue
+        # Also skip import maps that reference three.js addons we've already imported
+        if re.match(r'^\s*import\s+.*\s+from\s+[\'"]three/examples/', line.strip()):
+            continue
+        processed_lines.append(line)
+    
+    processed_code = '\n'.join(processed_lines)
+    
+    # Replace THREE references to use window.THREE (which has addons)
+    # This ensures code using THREE.TeapotGeometry etc. will work
+    processed_code = re.sub(r'\bTHREE\.', 'window.THREE.', processed_code)
+    
+    return processed_code
+
+
+def extract_vite_url(line: str) -> str:
+    """
+    Extract Vite server URL from output line.
+    
+    Args:
+        line: A line of output from Vite
+        
+    Returns:
+        URL string if found, None otherwise
+    """
+    # Look for various Vite output patterns
+    patterns = [
+        r'Local:\s+(https?://[^\s]+)',
+        r'Network:\s+(https?://[^\s]+)',
+        r'(https?://localhost:\d+)',
+        r'(https?://127\.0\.0\.1:\d+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, line)
+        if match:
+            return match.group(1)
+    return None
 
 
 def setup_vite_project(js_code: str, project_dir: str):
@@ -91,11 +148,78 @@ def setup_vite_project(js_code: str, project_dir: str):
         f.write(html_content)
 
     # Create main.js with user's code
-    # Ensure imports are converted to ES6 module syntax
-    main_js = js_code
-    # If code doesn't have any import statements, add a default import
-    if "import" not in main_js.lower():
-        main_js = "import * as THREE from 'three';\n" + main_js
+    # Prepend common three.js imports and addons
+    common_imports = """import * as THREE from 'three';
+
+// Import common three.js addons - controls
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
+import { FlyControls } from 'three/examples/jsm/controls/FlyControls.js';
+
+// Import common three.js addons - geometries
+import { TeapotGeometry } from 'three/examples/jsm/geometries/TeapotGeometry.js';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+
+// Import common three.js addons - loaders
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+
+// Import common three.js addons - post-processing
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+
+// Import common three.js addons - animation
+import { AnimationMixer } from 'three/examples/jsm/animation/AnimationMixer.js';
+
+// Import common three.js addons - environments
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+
+// Make THREE globally available
+window.THREE = THREE;
+
+// Attach addons to THREE namespace (preserving original THREE object)
+THREE.OrbitControls = OrbitControls;
+THREE.TrackballControls = TrackballControls;
+THREE.FlyControls = FlyControls;
+THREE.TeapotGeometry = TeapotGeometry;
+THREE.TeapotBufferGeometry = TeapotGeometry; // Alias for older code
+THREE.RoundedBoxGeometry = RoundedBoxGeometry;
+THREE.TextGeometry = TextGeometry;
+THREE.GLTFLoader = GLTFLoader;
+THREE.OBJLoader = OBJLoader;
+THREE.FBXLoader = FBXLoader;
+THREE.FontLoader = FontLoader;
+THREE.DRACOLoader = DRACOLoader;
+THREE.HDRLoader = HDRLoader;
+THREE.RGBELoader = RGBELoader;
+THREE.EffectComposer = EffectComposer;
+THREE.RenderPass = RenderPass;
+THREE.UnrealBloomPass = UnrealBloomPass;
+THREE.ShaderPass = ShaderPass;
+THREE.AnimationMixer = AnimationMixer;
+THREE.RoomEnvironment = RoomEnvironment;
+
+// Also make commonly used addons available globally for code that expects them
+window.OrbitControls = OrbitControls;
+window.GLTFLoader = GLTFLoader;
+window.EffectComposer = EffectComposer;
+window.RenderPass = RenderPass;
+window.AnimationMixer = AnimationMixer;
+
+"""
+
+    # Process user's code using the improved function
+    user_code = process_user_code(js_code)
+
+    main_js = common_imports + user_code
 
     with open(os.path.join(project_dir, "main.js"), "w") as f:
         f.write(main_js)
@@ -174,16 +298,10 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
             line = vite_process.stdout.readline()
             if line:
                 print(line.strip())
-                # Look for the local server URL
-                if "local:" in line.lower() or "localhost" in line.lower():
-                    # Extract URL from output like "Local:   http://localhost:5173/"
-                    parts = line.split()
-                    for part in parts:
-                        if part.startswith("http://"):
-                            server_url = part.strip()
-                            break
-
-                if server_url:
+                # Use improved URL extraction
+                extracted_url = extract_vite_url(line)
+                if extracted_url:
+                    server_url = extracted_url
                     break
 
             await asyncio.sleep(0.5)
