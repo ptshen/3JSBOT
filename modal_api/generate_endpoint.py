@@ -28,14 +28,14 @@ def load_system_prompt() -> str:
     
     try:
         # Try to read from the file in the container
-        prompt_path = "/root/system_prompt.md"
+        prompt_path = "/root/generate_system_prompt.md"
         if os.path.exists(prompt_path):
             with open(prompt_path, "r") as f:
                 content = f.read()
                 logger.info(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
                 return content
         # Fallback: try current directory (for local development)
-        prompt_path = "system_prompt.md"
+        prompt_path = "generate_system_prompt.md"
         if os.path.exists(prompt_path):
             with open(prompt_path, "r") as f:
                 content = f.read()
@@ -121,9 +121,9 @@ Remember: Output ONLY JavaScript code. No markdown, no explanations, no extra te
 """
     import os
     os.makedirs("/root", exist_ok=True)
-    with open("/root/system_prompt.md", "w") as f:
+    with open("/root/generate_system_prompt.md", "w") as f:
         f.write(system_prompt_content)
-    logger.info(f"Created system prompt file at /root/system_prompt.md ({len(system_prompt_content)} chars)")
+    logger.info(f"Created system prompt file at /root/generate_system_prompt.md ({len(system_prompt_content)} chars)")
 
 
 def wait_for_ollama(timeout: int = 30, interval: int = 2) -> None:
@@ -178,7 +178,7 @@ async def get_system_prompt():
     return {
         "prompt_length": len(prompt),
         "prompt_preview": prompt[:200] + "..." if len(prompt) > 200 else prompt,
-        "file_exists": os.path.exists("/root/system_prompt.md")
+        "file_exists": os.path.exists("/root/generate_system_prompt.md")
     }
 
 
