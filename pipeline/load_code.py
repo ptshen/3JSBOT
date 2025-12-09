@@ -1,15 +1,17 @@
-"""This file loads three.js code in a browser environment using Playwright and renders the animation."""
+"""This file loads three.js code in a browser environment using Playwright and renders the animation.
+Based on the Codecademy guide: https://www.codecademy.com/article/build-a-3d-environment-with-three-js
+"""
 
 import asyncio
 from playwright.async_api import async_playwright
 import os
-import json
-import subprocess
-import shutil
 import tempfile
-import time
-import signal
 import re
+import http.server
+import socketserver
+import threading
+import socket
+from pathlib import Path
 
 
 def read_js_from_file(file_path: str = "gen_code.js") -> str:
@@ -26,42 +28,99 @@ def read_js_from_file(file_path: str = "gen_code.js") -> str:
         return f.read()
 
 
-def setup_vite_project(js_code: str, project_dir: str):
+def process_js_code(js_code: str) -> str:
     """
-    Set up a vite project with three.js and the user's code.
-
+    Process JavaScript code to work with CDN-based Three.js.
+    Converts ES6 imports to use global THREE object (Codecademy guide pattern).
+    
     Args:
         js_code: The JavaScript code containing three.js animation logic
-        project_dir: Directory where the vite project will be created
+    
+    Returns:
+        Processed JavaScript code compatible with CDN Three.js
     """
-    # Create package.json
-    package_json = {
-        "name": "threejs-vite-temp",
-        "private": True,
-        "version": "0.0.0",
-        "type": "module",
-        "scripts": {
-            "dev": "vite",
-            "build": "vite build",
-            "preview": "vite preview"
-        },
-        "devDependencies": {
-            "vite": "^5.0.0"
-        },
-        "dependencies": {
-            "three": "^0.160.0"
-        }
-    }
+    # Check if OrbitControls is imported
+    needs_orbit_controls = 'OrbitControls' in js_code and 'import' in js_code
+    
+    # Remove all ES6 import statements (more comprehensive regex)
+    # Match import statements with various formats
+    processed_code = re.sub(r"import\s+.*?from\s+['\"]three['\"];?\s*\n?", "", js_code, flags=re.MULTILINE)
+    processed_code = re.sub(r"import\s+.*?from\s+['\"]three/examples.*?['\"];?\s*\n?", "", processed_code, flags=re.MULTILINE)
+    processed_code = re.sub(r"import\s+.*?from\s+['\"]three['\"];?\s*$", "", processed_code, flags=re.MULTILINE)
+    processed_code = re.sub(r"import\s+.*?from\s+['\"]three/examples.*?['\"];?\s*$", "", processed_code, flags=re.MULTILINE)
+    
+    # Load OrbitControls if needed (using dynamic import)
+    addons_code = ""
+    if needs_orbit_controls:
+        addons_code = """
+// Load OrbitControls addon from CDN
+const OrbitControlsModule = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js');
+const OrbitControls = OrbitControlsModule.OrbitControls;
+// Make OrbitControls available globally (not on THREE object since it's not extensible)
+window.OrbitControls = OrbitControls;
 
-    with open(os.path.join(project_dir, "package.json"), "w") as f:
-        json.dump(package_json, f, indent=2)
+"""
+    
+    # Replace OrbitControls references to use window.OrbitControls
+    # This handles cases where code uses `new OrbitControls(...)` or `new THREE.OrbitControls(...)`
+    if needs_orbit_controls:
+        # Replace THREE.OrbitControls with OrbitControls (which will be available from window)
+        processed_code = re.sub(r'\bTHREE\.OrbitControls\b', 'OrbitControls', processed_code)
+    
+    # Add automatic renderer and camera setup if they're missing (Codecademy guide pattern)
+    # Check if renderer or camera are referenced but not defined
+    has_renderer_ref = 'renderer' in processed_code.lower()
+    has_camera_ref = 'camera' in processed_code.lower()
+    has_renderer_def = re.search(r'\b(const|let|var)\s+renderer\s*=', processed_code)
+    has_camera_def = re.search(r'\b(const|let|var)\s+camera\s*=', processed_code)
+    
+    setup_code = ""
+    if has_renderer_ref and not has_renderer_def:
+        setup_code += """
+// Auto-create renderer if missing (Codecademy guide pattern)
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-    # Create index.html
-    # Check if the code references 'myCanvas' to decide whether to include it
-    needs_canvas_element = 'myCanvas' in js_code or "getElementById('myCanvas')" in js_code or 'getElementById("myCanvas")' in js_code
+"""
+    if has_camera_ref and not has_camera_def:
+        setup_code += """
+// Auto-create camera if missing (Codecademy guide pattern)
+var camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5;
+camera.lookAt(0, 0, 0);
 
-    canvas_element = '<canvas id="myCanvas"></canvas>' if needs_canvas_element else ''
+"""
+    
+    # Wrap in async IIFE to allow await for addons
+    wrapped_code = f"""
+(async function() {{
+{addons_code}
+{setup_code}
+{processed_code}
+}})();
+"""
+    
+    return wrapped_code
 
+
+def create_html_file(js_code: str, output_dir: str) -> str:
+    """
+    Create an HTML file following the Codecademy guide pattern.
+    Uses Three.js CDN and embeds the JavaScript code.
+    
+    Args:
+        js_code: The processed JavaScript code
+        output_dir: Directory where HTML file will be created
+    
+    Returns:
+        Path to the created HTML file
+    """
+    # Process the JavaScript code
+    processed_js = process_js_code(js_code)
+    
+    # Create HTML following Codecademy guide structure
+    # Using ES module version of Three.js from CDN with import map
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,11 +128,17 @@ def setup_vite_project(js_code: str, project_dir: str):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Three.js Animation</title>
     <style>
-        body {{
+        html, body {{
             margin: 0;
             padding: 0;
-            overflow: hidden;
+        }}
+        body {{
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             background-color: #000;
+            overflow: hidden;
         }}
         canvas {{
             display: block;
@@ -81,261 +146,200 @@ def setup_vite_project(js_code: str, project_dir: str):
             height: 100vh;
         }}
     </style>
+    <!-- Import map to resolve 'three' module specifier -->
+    <script type="importmap">
+    {{
+        "imports": {{
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }}
+    }}
+    </script>
+    <!-- Load Three.js as ES module from CDN (following Codecademy guide approach) -->
+    <script type="module">
+        // Import Three.js as ES module and make it globally available
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+        
+        // Make THREE available globally (Codecademy guide pattern)
+        window.THREE = THREE;
+        
+        // User's code will run here
+        {processed_js}
+    </script>
 </head>
-<body>
-    {canvas_element}
-    <script type="module" src="/main.js"></script>
-</body>
+<body></body>
 </html>"""
-
-    with open(os.path.join(project_dir, "index.html"), "w") as f:
+    
+    html_path = os.path.join(output_dir, "index.html")
+    with open(html_path, "w") as f:
         f.write(html_content)
-
-    # Create main.js with user's code
-    # Prepend common three.js imports and addons
-    common_imports = """import * as THREE from 'three';
-
-// Import common three.js addons
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TeapotGeometry } from 'three/examples/jsm/geometries/TeapotGeometry.js';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
-import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-
-// Polyfill for deprecated THREE.Geometry class (removed in r125+)
-class LegacyGeometry extends THREE.BufferGeometry {
-    constructor() {
-        super();
-        this.vertices = [];
-        this.faces = [];
-        this.type = 'Geometry';
-    }
-
-    // Convert legacy vertices/faces to BufferGeometry attributes
-    _updateBufferGeometry() {
-        if (this.vertices.length === 0) return;
-
-        const positions = new Float32Array(this.vertices.length * 3);
-        for (let i = 0; i < this.vertices.length; i++) {
-            positions[i * 3] = this.vertices[i].x;
-            positions[i * 3 + 1] = this.vertices[i].y;
-            positions[i * 3 + 2] = this.vertices[i].z;
-        }
-        this.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-        if (this.faces.length > 0) {
-            const indices = new Uint16Array(this.faces.length * 3);
-            for (let i = 0; i < this.faces.length; i++) {
-                indices[i * 3] = this.faces[i].a;
-                indices[i * 3 + 1] = this.faces[i].b;
-                indices[i * 3 + 2] = this.faces[i].c;
-            }
-            this.setIndex(new THREE.BufferAttribute(indices, 1));
-        }
-
-        this.computeVertexNormals();
-    }
-}
-
-// Wrap THREE.Mesh to auto-convert LegacyGeometry when used
-const OriginalMesh = THREE.Mesh;
-class MeshWrapper extends OriginalMesh {
-    constructor(geometry, material) {
-        // If geometry is LegacyGeometry and has vertices, convert it
-        if (geometry instanceof LegacyGeometry && geometry.vertices.length > 0) {
-            geometry._updateBufferGeometry();
-        }
-        super(geometry, material);
-    }
-}
-
-// Make THREE globally available with addons by extending it
-window.THREE = {
-    ...THREE,
-    OrbitControls,
-    TeapotGeometry,
-    TeapotBufferGeometry: TeapotGeometry, // Alias for older code
-    RoundedBoxGeometry,
-    GLTFLoader,
-    OBJLoader,
-    FBXLoader,
-    FontLoader,
-    TextGeometry,
-    // Add aliases for deprecated BufferGeometry classes (for backwards compatibility)
-    BoxBufferGeometry: THREE.BoxGeometry,
-    SphereBufferGeometry: THREE.SphereGeometry,
-    PlaneBufferGeometry: THREE.PlaneGeometry,
-    CylinderBufferGeometry: THREE.CylinderGeometry,
-    ConeBufferGeometry: THREE.ConeGeometry,
-    TorusBufferGeometry: THREE.TorusGeometry,
-    TorusKnotBufferGeometry: THREE.TorusKnotGeometry,
-    // Add polyfill for removed Geometry class
-    Geometry: LegacyGeometry,
-    // Override Mesh to auto-convert legacy geometries
-    Mesh: MeshWrapper
-};
-
-"""
-
-    # Process user's code - remove their THREE import if present
-    user_code = js_code
-    # Remove import statements for 'three' to avoid conflicts
-    user_code = re.sub(r"import\s+.*?from\s+['\"]three['\"];?\s*\n?", "", user_code)
-
-    # Replace THREE references to use window.THREE (which has addons)
-    # This ensures code using THREE.TeapotGeometry etc. will work
-    user_code = re.sub(r'\bTHREE\.', 'window.THREE.', user_code)
-
-    # Add automatic camera positioning if camera isn't positioned
-    # This helps with generated code that forgets to position the camera
-    camera_position_fix = """
-
-// Auto-fix camera position if it's at origin (common mistake in generated code)
-if (typeof camera !== 'undefined' && camera.position.x === 0 && camera.position.y === 0 && camera.position.z === 0) {
-    camera.position.z = 5;
-}
-// Auto-fix camera lookAt if camera exists and hasn't been pointed at anything
-if (typeof camera !== 'undefined') {
-    camera.lookAt(0, 0, 0);
-}
-"""
-
-    main_js = common_imports + user_code + camera_position_fix
-
-    with open(os.path.join(project_dir, "main.js"), "w") as f:
-        f.write(main_js)
+    
+    return html_path
 
 
-async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", wait_time: float = 2.0, keep_server_running: bool = False, project_dir: str = "threejs_vite_project"):
+class SimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """Custom handler to serve files with proper CORS headers."""
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', '*')
+        super().end_headers()
+
+
+def find_available_port(start_port: int = 8000, max_attempts: int = 10) -> int:
     """
-    Load three.js JavaScript code in a browser environment using Vite and Playwright,
-    render the animation, and take a screenshot.
+    Find an available port starting from start_port.
+    
+    Args:
+        start_port: Starting port number
+        max_attempts: Maximum number of ports to try
+    
+    Returns:
+        Available port number
+    """
+    import socket
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"Could not find an available port in range {start_port}-{start_port + max_attempts - 1}")
 
+
+def start_http_server(directory: str, port: int = None) -> tuple:
+    """
+    Start a simple HTTP server to serve the HTML file.
+    
+    Args:
+        directory: Directory to serve files from
+        port: Port number (default: None, will find available port)
+    
+    Returns:
+        Tuple of (server object, server URL)
+    """
+    # Find available port if not specified
+    if port is None:
+        port = find_available_port()
+    
+    os.chdir(directory)
+    handler = SimpleHTTPRequestHandler
+    
+    # Try to bind to the port, find another if it's in use
+    for attempt in range(10):
+        try:
+            httpd = socketserver.TCPServer(("", port), handler)
+            break
+        except OSError as e:
+            if e.errno == 48:  # Address already in use
+                port = find_available_port(port + 1)
+                continue
+            raise
+    
+    # Start server in a separate thread
+    server_thread = threading.Thread(target=httpd.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    server_url = f"http://localhost:{port}"
+    return httpd, server_url
+
+
+async def load_and_render_threejs(
+    js_code: str, 
+    output_path: str = "test.jpg", 
+    wait_time: float = 2.0,
+    keep_server_running: bool = False,
+    project_dir: str = None
+):
+    """
+    Load three.js JavaScript code in a browser environment using Playwright,
+    render the animation, and take a screenshot.
+    Follows the Codecademy guide approach using CDN-based Three.js.
+    
     Args:
         js_code: The JavaScript code containing three.js animation logic
         output_path: Path where the screenshot will be saved (default: "test.jpg")
         wait_time: Time in seconds to wait for animation to render (default: 2.0)
-        keep_server_running: If True, keep the vite server running after screenshot for manual viewing (default: False)
-        project_dir: Directory where the vite project will be created (default: "threejs_vite_project")
+        keep_server_running: If True, keep the HTTP server running (default: False)
+        project_dir: Directory where files will be created (default: None, uses temp dir)
     """
-    # Use persistent directory if keeping server running, otherwise use temp directory
-    if keep_server_running:
-        # Create persistent directory in current working directory
+    # Create output directory
+    if project_dir:
         if os.path.exists(project_dir):
+            import shutil
             shutil.rmtree(project_dir)
         os.makedirs(project_dir)
         temp_dir = project_dir
         cleanup_dir = False
     else:
-        temp_dir = tempfile.mkdtemp(prefix="threejs_vite_")
+        temp_dir = tempfile.mkdtemp(prefix="threejs_")
         cleanup_dir = True
-
-    vite_process = None
-
+    
+    httpd = None
+    
     try:
-        print(f"Setting up vite project in {temp_dir}...")
-
-        # Set up vite project structure
-        setup_vite_project(js_code, temp_dir)
-
-        # Install dependencies
-        print("Installing npm dependencies...")
-        install_process = subprocess.run(
-            ["npm", "install"],
-            cwd=temp_dir,
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-
-        if install_process.returncode != 0:
-            print(f"npm install error: {install_process.stderr}")
-            raise RuntimeError(f"Failed to install dependencies: {install_process.stderr}")
-
-        print("Dependencies installed successfully.")
-
-        # Start vite dev server
-        print("Starting vite dev server...")
-        vite_process = subprocess.Popen(
-            ["npm", "run", "dev"],
-            cwd=temp_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        # Wait for server to be ready and extract URL
-        server_url = None
-        max_wait = 30  # Maximum wait time in seconds
-        start_time = time.time()
-
-        while time.time() - start_time < max_wait:
-            if vite_process.poll() is not None:
-                # Process has terminated
-                stdout, stderr = vite_process.communicate()
-                raise RuntimeError(f"Vite server failed to start:\nstdout: {stdout}\nstderr: {stderr}")
-
-            # Check if we can read from stdout without blocking
-            line = vite_process.stdout.readline()
-            if line:
-                print(line.strip())
-                # Look for the local server URL
-                if "local:" in line.lower() or "localhost" in line.lower():
-                    # Extract URL from output like "Local:   http://localhost:5173/"
-                    parts = line.split()
-                    for part in parts:
-                        if part.startswith("http://"):
-                            server_url = part.strip()
-                            break
-
-                if server_url:
-                    break
-
-            await asyncio.sleep(0.5)
-
-        if not server_url:
-            # Default to standard vite port
-            server_url = "http://localhost:5173"
-
-        print(f"Vite server ready at {server_url}")
-
-        # Give server a moment to fully initialize
-        await asyncio.sleep(2)
-
+        print(f"Creating HTML file in {temp_dir}...")
+        
+        # Create HTML file with embedded JavaScript
+        html_path = create_html_file(js_code, temp_dir)
+        print(f"HTML file created: {html_path}")
+        
+        # Start HTTP server
+        print("Starting HTTP server...")
+        httpd, server_url = start_http_server(temp_dir)
+        print(f"HTTP server ready at {server_url}")
+        
+        # Give server a moment to initialize
+        await asyncio.sleep(1)
+        
         # Launch browser with Playwright
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-
+            
             # Set viewport size
             await page.set_viewport_size({'width': 1920, 'height': 1080})
-
-            # Load the page from vite server
+            
+            # Set up console logging (filter out WebGL context warnings)
+            def log_console(msg):
+                # Filter out the WebGL context warning since it's not critical
+                if "WebGL context" not in msg.text and "existing context" not in msg.text:
+                    print(f"Browser console: {msg.text}")
+            page.on('console', log_console)
+            page.on('pageerror', lambda err: print(f"Page error: {err}"))
+            
+            # Load the page
+            html_url = f"{server_url}/index.html"
+            print(f"Loading page: {html_url}")
             try:
-                await page.goto(server_url, wait_until='networkidle', timeout=30000)
+                await page.goto(html_url, wait_until='networkidle', timeout=30000)
             except Exception as e:
                 print(f"Error loading page: {e}")
-                # Try to get console messages for debugging
-                page.on('console', lambda msg: print(f"Browser console: {msg.text}"))
                 raise
-
-            # Wait for canvas element and WebGL context to be created
+            
+            # Wait for Three.js to load and scene to be created
+            await page.wait_for_function(
+                '() => typeof THREE !== "undefined" && typeof THREE.Scene !== "undefined"',
+                timeout=15000
+            )
+            print("Three.js loaded")
+            
+            # Wait for canvas element to exist (don't check WebGL context to avoid multiple context creation)
             await page.wait_for_function('''
                 () => {
                     const allCanvases = document.querySelectorAll('canvas');
                     for (let canvas of allCanvases) {
-                        const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
-                        if (gl !== null && canvas.width > 0 && canvas.height > 0) {
+                        if (canvas.width > 0 && canvas.height > 0) {
                             return true;
                         }
                     }
                     return false;
                 }
             ''', timeout=15000)
-
+            print("Canvas ready")
+            
             # Wait for multiple animation frames to ensure rendering has occurred
             await page.evaluate('''
                 () => new Promise((resolve) => {
@@ -354,17 +358,16 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
                     checkFrame();
                 })
             ''')
-
+            
             # Additional wait to ensure animation has fully rendered
             await asyncio.sleep(wait_time)
-
-            # Verify canvas is visible before screenshot
-            await page.wait_for_function('''
+            
+            # Verify canvas is visible before screenshot (no fallback rendering)
+            canvas_ready = await page.evaluate('''
                 () => {
                     const allCanvases = document.querySelectorAll('canvas');
                     for (let canvas of allCanvases) {
-                        const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
-                        if (gl !== null && canvas.width > 0 && canvas.height > 0) {
+                        if (canvas.width > 0 && canvas.height > 0) {
                             const rect = canvas.getBoundingClientRect();
                             const style = window.getComputedStyle(canvas);
                             if (rect.width > 0 && rect.height > 0 &&
@@ -377,66 +380,80 @@ async def load_and_render_threejs(js_code: str, output_path: str = "test.jpg", w
                     }
                     return false;
                 }
-            ''', timeout=5000)
-
-            # Take screenshot
-            await page.screenshot(path=output_path, type='jpeg', quality=90, full_page=True)
-
+            ''')
+            
+            if not canvas_ready:
+                print("Warning: Canvas not ready, capturing blank screen")
+            
+            # Take screenshot of the actual page (no fallback - will capture blank if nothing rendered)
+            print(f"Taking screenshot...")
+            # Screenshot the canvas element directly if it exists, otherwise screenshot the page
+            canvas_exists = await page.evaluate('document.querySelector("canvas") !== null')
+            if canvas_exists:
+                # Screenshot just the canvas element
+                canvas_element = await page.query_selector('canvas')
+                if canvas_element:
+                    await canvas_element.screenshot(path=output_path, type='jpeg', quality=90)
+                else:
+                    # Fallback to full page if canvas selector fails
+                    await page.screenshot(path=output_path, type='jpeg', quality=90, full_page=True)
+            else:
+                # No canvas found, screenshot blank page
+                await page.screenshot(path=output_path, type='jpeg', quality=90, full_page=True)
             print(f"Screenshot saved to {output_path}")
-
+            
             # Close browser
             await browser.close()
-
+        
         if keep_server_running:
             print(f"\n{'='*60}")
             print(f"Screenshot saved to {output_path}")
-            print(f"Vite server is running at {server_url}")
+            print(f"HTTP server is running at {server_url}")
             print(f"Project directory: {temp_dir}")
-            print(f"\nYou can now view the animation in your browser!")
+            print(f"\nYou can view the animation at: {html_url}")
             print(f"Press Ctrl+C to stop the server when you're done.")
             print(f"{'='*60}\n")
-
+            
             # Keep the server running - wait for user interrupt
             try:
                 while True:
                     await asyncio.sleep(1)
             except KeyboardInterrupt:
                 print("\nShutting down server...")
-
+    
     finally:
-        # Stop vite server
-        if vite_process and not keep_server_running:
-            print("Stopping vite server...")
-            vite_process.terminate()
+        # Stop HTTP server
+        if httpd:
+            print("Stopping HTTP server...")
             try:
-                vite_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                vite_process.kill()
-        elif vite_process and keep_server_running:
-            # User interrupted, stop the server
-            print("Stopping vite server...")
-            vite_process.terminate()
-            try:
-                vite_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                vite_process.kill()
-
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception as e:
+                print(f"Error shutting down server: {e}")
+        
         # Clean up temporary directory only if not keeping it
         if cleanup_dir and os.path.exists(temp_dir):
             print(f"Cleaning up temporary directory {temp_dir}...")
+            import shutil
             shutil.rmtree(temp_dir)
 
 
-def render_threejs(js_code: str, output_path: str = "test.jpg", wait_time: float = 2.0, keep_server_running: bool = False, project_dir: str = "threejs_vite_project"):
+def render_threejs(
+    js_code: str, 
+    output_path: str = "test.jpg", 
+    wait_time: float = 2.0,
+    keep_server_running: bool = False,
+    project_dir: str = None
+):
     """
     Synchronous wrapper for load_and_render_threejs.
-
+    
     Args:
         js_code: The JavaScript code containing three.js animation logic
         output_path: Path where the screenshot will be saved (default: "test.jpg")
         wait_time: Time in seconds to wait for animation to render (default: 2.0)
-        keep_server_running: If True, keep the vite server running after screenshot for manual viewing (default: False)
-        project_dir: Directory where the vite project will be created (default: "threejs_vite_project")
+        keep_server_running: If True, keep the HTTP server running (default: False)
+        project_dir: Directory where files will be created (default: None, uses temp dir)
     """
     asyncio.run(load_and_render_threejs(js_code, output_path, wait_time, keep_server_running, project_dir))
 
@@ -444,7 +461,7 @@ def render_threejs(js_code: str, output_path: str = "test.jpg", wait_time: float
 if __name__ == "__main__":
     # Read JavaScript code from gen_code.js
     js_code = read_js_from_file("gen_code.js")
-
+    
     # Render and save screenshot
     # Set keep_server_running=True to view in browser, False for automated screenshot only
     render_threejs(js_code, keep_server_running=True)
