@@ -56,7 +56,7 @@ modal --version
 Deploy the application to Modal:
 
 ```bash
-modal deploy endpoint.py
+modal deploy generate_endpoint.py
 ```
 
 The deployment process will:
@@ -81,7 +81,7 @@ Web endpoint: https://YOUR_USERNAME--ollama-ollama-serve.modal.run
 To update your deployment after making changes:
 
 ```bash
-modal deploy endpoint.py
+modal deploy generate_endpoint.py
 ```
 
 Modal will automatically detect changes and rebuild only what's necessary.
@@ -92,17 +92,17 @@ There are several ways to add more models to your deployment:
 
 ### Method 1: Change Default Model (Recommended for Single Model)
 
-Edit `endpoint.py` and modify the `MODEL` variable:
+Edit `generate_endpoint.py` and modify the `MODEL` variable:
 
 ```python
-# Line 18 in endpoint.py
+# Line 18 in generate_endpoint.py
 MODEL = os.environ.get("MODEL", "llama2:13b")  # Change from gemma2:27b
 ```
 
 You can also set it via environment variable:
 
 ```bash
-MODEL=llama2:13b modal deploy endpoint.py
+MODEL=llama2:13b modal deploy generate_endpoint.py
 ```
 
 ### Method 2: Pre-pull Multiple Models
@@ -341,7 +341,7 @@ You can configure the deployment using environment variables:
 
 Set during deployment:
 ```bash
-MODEL=llama2:13b modal deploy endpoint.py
+MODEL=llama2:13b modal deploy generate_endpoint.py
 ```
 
 ### GPU Configuration
@@ -419,7 +419,7 @@ modal app logs ollama --function Ollama.serve
 
 ```
 modal_api/
-├── endpoint.py          # Main application file
+├── generate_endpoint.py          # Main application file
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file
 ```

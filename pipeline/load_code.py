@@ -105,6 +105,53 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 
+// Polyfill for deprecated THREE.Geometry class (removed in r125+)
+class LegacyGeometry extends THREE.BufferGeometry {
+    constructor() {
+        super();
+        this.vertices = [];
+        this.faces = [];
+        this.type = 'Geometry';
+    }
+
+    // Convert legacy vertices/faces to BufferGeometry attributes
+    _updateBufferGeometry() {
+        if (this.vertices.length === 0) return;
+
+        const positions = new Float32Array(this.vertices.length * 3);
+        for (let i = 0; i < this.vertices.length; i++) {
+            positions[i * 3] = this.vertices[i].x;
+            positions[i * 3 + 1] = this.vertices[i].y;
+            positions[i * 3 + 2] = this.vertices[i].z;
+        }
+        this.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        if (this.faces.length > 0) {
+            const indices = new Uint16Array(this.faces.length * 3);
+            for (let i = 0; i < this.faces.length; i++) {
+                indices[i * 3] = this.faces[i].a;
+                indices[i * 3 + 1] = this.faces[i].b;
+                indices[i * 3 + 2] = this.faces[i].c;
+            }
+            this.setIndex(new THREE.BufferAttribute(indices, 1));
+        }
+
+        this.computeVertexNormals();
+    }
+}
+
+// Wrap THREE.Mesh to auto-convert LegacyGeometry when used
+const OriginalMesh = THREE.Mesh;
+class MeshWrapper extends OriginalMesh {
+    constructor(geometry, material) {
+        // If geometry is LegacyGeometry and has vertices, convert it
+        if (geometry instanceof LegacyGeometry && geometry.vertices.length > 0) {
+            geometry._updateBufferGeometry();
+        }
+        super(geometry, material);
+    }
+}
+
 // Make THREE globally available with addons by extending it
 window.THREE = {
     ...THREE,
@@ -124,7 +171,11 @@ window.THREE = {
     CylinderBufferGeometry: THREE.CylinderGeometry,
     ConeBufferGeometry: THREE.ConeGeometry,
     TorusBufferGeometry: THREE.TorusGeometry,
-    TorusKnotBufferGeometry: THREE.TorusKnotGeometry
+    TorusKnotBufferGeometry: THREE.TorusKnotGeometry,
+    // Add polyfill for removed Geometry class
+    Geometry: LegacyGeometry,
+    // Override Mesh to auto-convert legacy geometries
+    Mesh: MeshWrapper
 };
 
 """
@@ -138,7 +189,21 @@ window.THREE = {
     # This ensures code using THREE.TeapotGeometry etc. will work
     user_code = re.sub(r'\bTHREE\.', 'window.THREE.', user_code)
 
-    main_js = common_imports + user_code
+    # Add automatic camera positioning if camera isn't positioned
+    # This helps with generated code that forgets to position the camera
+    camera_position_fix = """
+
+// Auto-fix camera position if it's at origin (common mistake in generated code)
+if (typeof camera !== 'undefined' && camera.position.x === 0 && camera.position.y === 0 && camera.position.z === 0) {
+    camera.position.z = 5;
+}
+// Auto-fix camera lookAt if camera exists and hasn't been pointed at anything
+if (typeof camera !== 'undefined') {
+    camera.lookAt(0, 0, 0);
+}
+"""
+
+    main_js = common_imports + user_code + camera_position_fix
 
     with open(os.path.join(project_dir, "main.js"), "w") as f:
         f.write(main_js)

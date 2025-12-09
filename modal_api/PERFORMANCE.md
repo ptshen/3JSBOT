@@ -166,7 +166,7 @@ If you have multiple requests, batch them to share GPU time.
 
 ## Quick GPU Upgrade
 
-To upgrade to A100, change this line in `endpoint.py`:
+To upgrade to A100, change this line in `generate_endpoint.py`:
 
 ```python
 @app.cls(
@@ -178,7 +178,7 @@ To upgrade to A100, change this line in `endpoint.py`:
 
 Then redeploy:
 ```bash
-modal deploy endpoint.py
+modal deploy generate_endpoint.py
 ```
 
 ## Testing Performance
@@ -186,7 +186,7 @@ modal deploy endpoint.py
 Test your current setup:
 ```bash
 # Time a warm request
-time curl -X POST https://YOUR_ENDPOINT.modal.run/v1/chat/completions \
+time curl -X POST https://YOUR_generate_endpoint.modal.run/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "codellama:7b",

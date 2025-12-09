@@ -1,38 +1,66 @@
+// Basic Three.js scene that creates a simple 3D book
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+// Scene setup
 const scene = new THREE.Scene();
-
-// Add a box to the scene
-const geometry = new THREE.BoxGeometry(1, 1, 1);
-const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-const mesh = new THREE.Mesh(geometry, material);
-scene.add(mesh);
-
-// Add a bowl to the scene
-const geometry2 = new THREE.TorusGeometry(1, 0.3, 64, 64);
-const material2 = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const mesh2 = new THREE.Mesh(geometry2, material2);
-mesh2.position.set(0, 1, 0);
-scene.add(mesh2);
-
-// Add a camera to the scene
-const fov = 75;
-const aspect = window.innerWidth / window.innerHeight;
-const near = 0.1;
-const far = 1000;
-const camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
-camera.position.z = 5;
-scene.add(camera);
-
-// Add a renderer to the scene
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// Animate the bowl
+// Controls
+const controls = new OrbitControls(camera, renderer.domElement);
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(5, 10, 7);
+scene.add(directionalLight);
+
+// Book dimensions
+const coverWidth = 4;
+const coverHeight = 6;
+const coverDepth = 0.2;
+const pagesDepth = 1.2;
+
+// Materials
+const coverMaterial = new THREE.MeshPhongMaterial({ color: 0x553311 });
+const pagesMaterial = new THREE.MeshPhongMaterial({ color: 0xf5f5dc });
+
+// Book cover (back)
+const backCoverGeometry = new THREE.BoxGeometry(coverWidth, coverHeight, coverDepth);
+const backCover = new THREE.Mesh(backCoverGeometry, coverMaterial);
+backCover.position.z = -pagesDepth / 2;
+scene.add(backCover);
+
+// Book cover (front)
+const frontCover = new THREE.Mesh(backCoverGeometry, coverMaterial);
+frontCover.position.z = pagesDepth / 2;
+scene.add(frontCover);
+
+// Pages block
+const pagesGeometry = new THREE.BoxGeometry(coverWidth * 0.98, coverHeight * 0.97, pagesDepth);
+const pages = new THREE.Mesh(pagesGeometry, pagesMaterial);
+scene.add(pages);
+
+// Camera position
+camera.position.set(8, 8, 10);
+camera.lookAt(0, 0, 0);
+
+// Render loop
 function animate() {
   requestAnimationFrame(animate);
-  mesh2.rotation.x += 0.01;
-  mesh2.rotation.y += 0.01;
   renderer.render(scene, camera);
 }
+
 animate();
+
+// Resize handler
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
