@@ -128,10 +128,22 @@ WantedBy=default.target
 
 
 def create_system_prompt_file() -> None:
-    """Create the system prompt file for image annotation."""
+    """Create the system prompt file for image evaluation from eval_system_prompt.md."""
     from loguru import logger
+    import os
 
-    system_prompt_content = """You are an expert image annotation assistant powered by Qwen3VL. Your task is to analyze images and provide detailed, accurate annotations.
+    # Read from the file that was copied into the image
+    prompt_file_path = "/root/eval_system_prompt.md"
+    
+    try:
+        if os.path.exists(prompt_file_path):
+            with open(prompt_file_path, "r") as f:
+                system_prompt_content = f.read()
+            logger.info(f"Loaded system prompt from {prompt_file_path} ({len(system_prompt_content)} chars)")
+        else:
+            # Fallback to default evaluation prompt if file not found
+            logger.warning(f"System prompt file not found at {prompt_file_path}, using default")
+            system_prompt_content = """You are an expert image evaluation assistant powered by Qwen3VL. Your task is to compare images to reference descriptions and provide accurate, objective evaluations of how well they match.
 
 CRITICAL RULES:
 1. Provide clear, structured, and detailed descriptions of images
@@ -159,13 +171,18 @@ EXAMPLES OF POOR ANNOTATIONS:
  "Some stuff on a table" (imprecise, unhelpful)
  "I think maybe there's a person but I'm not sure what they're doing" (overly uncertain without analysis)
 
-Remember: Be thorough, precise, and structured in your annotations.
+Remember: Be thorough, objective, and precise in your evaluations. Provide clear numerical ratings and detailed analysis.
 """
-    import os
+    except Exception as e:
+        logger.error(f"Error reading system prompt file: {e}")
+        # Use minimal fallback
+        system_prompt_content = "You are an expert image evaluation assistant. Compare images to reference descriptions and provide ratings from 0.0 to 1.0."
+    
+    # Ensure the file exists (it should already be there from copy_local_file)
     os.makedirs("/root", exist_ok=True)
     with open("/root/eval_system_prompt.md", "w") as f:
         f.write(system_prompt_content)
-    logger.info(f"Created system prompt file at /root/eval_system_prompt.md ({len(system_prompt_content)} chars)")
+    logger.info(f"System prompt file ready at /root/eval_system_prompt.md ({len(system_prompt_content)} chars)")
 
 
 def wait_for_ollama(timeout: int = 30, interval: int = 2) -> None:
@@ -205,8 +222,9 @@ image = (
         "usermod -a -G ollama $(whoami)",
     )
     .pip_install("ollama", "httpx", "loguru", "fastapi", "pydantic")
+    .add_local_file("eval_system_prompt.md", "/root/eval_system_prompt.md", copy=True)
     .run_function(create_service_file)
-    .run_function(create_system_prompt_file)
+    .run_function(create_system_prompt_file)  # This will verify/update the file
     .run_function(pull)
 )
 app = modal.App(name="qwen-vl-annotator", image=image)

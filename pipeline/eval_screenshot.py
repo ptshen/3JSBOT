@@ -100,85 +100,86 @@ Your task:
 
 Be precise and objective in your evaluation."""
 
-if len(sys.argv) < 3:
-    print("Usage: python3 eval_screenshot.py <image_path> <reference_description>")
-    print("\nExample:")
-    print('  python3 eval_screenshot.py image.jpg "A red bicycle leaning against a white wall"')
-    sys.exit(1)
-
-image_path = sys.argv[1]
-reference_description = sys.argv[2]
-
-# Read and encode image
-try:
-    with open(image_path, "rb") as f:
-        base64_image = base64.b64encode(f.read()).decode('utf-8')
-except FileNotFoundError:
-    print(f"Error: Image file not found: {image_path}", file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    print(f"Error reading image: {e}", file=sys.stderr)
-    sys.exit(1)
-
-# Create evaluation prompt
-prompt = create_evaluation_prompt(reference_description)
-
-# Send request
-try:
-    response = requests.post(
-        "https://patbshen--qwen-vl-annotator-qwenvlannotator-serve.modal.run/v1/annotate",
-        json={
-            "image": {"image_base64": base64_image},
-            "prompt": prompt
-        },
-        timeout=120  # 2 minute timeout for evaluation
-    )
-    response.raise_for_status()
-except requests.exceptions.RequestException as e:
-    print(f"Error making request to API: {e}", file=sys.stderr)
-    sys.exit(1)
-
-# Parse response
-try:
-    result = response.json()
-    
-    if "annotation" in result:
-        annotation = result["annotation"]
-        
-        # Extract rating
-        rating = extract_rating(annotation)
-        
-        if rating is not None:
-            # Output JSON with rating and full analysis
-            output = {
-                "rating": rating,
-                "analysis": annotation,
-                "reference_description": reference_description,
-                "image_path": image_path
-            }
-            print(json.dumps(output, indent=2))
-        else:
-            # If we can't extract a rating, output the full response
-            print("Warning: Could not extract rating from response", file=sys.stderr)
-            output = {
-                "rating": None,
-                "analysis": annotation,
-                "raw_response": annotation,
-                "reference_description": reference_description,
-                "image_path": image_path
-            }
-            print(json.dumps(output, indent=2))
-    else:
-        # Unexpected response format
-        print("Error: Unexpected response format", file=sys.stderr)
-        print(json.dumps(result, indent=2))
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python3 eval_screenshot.py <image_path> <reference_description>")
+        print("\nExample:")
+        print('  python3 eval_screenshot.py image.jpg "A red bicycle leaning against a white wall"')
         sys.exit(1)
+
+    image_path = sys.argv[1]
+    reference_description = sys.argv[2]
+
+    # Read and encode image
+    try:
+        with open(image_path, "rb") as f:
+            base64_image = base64.b64encode(f.read()).decode('utf-8')
+    except FileNotFoundError:
+        print(f"Error: Image file not found: {image_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading image: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create evaluation prompt
+    prompt = create_evaluation_prompt(reference_description)
+
+    # Send request
+    try:
+        response = requests.post(
+            "https://patbshen--qwen-vl-annotator-qwenvlannotator-serve.modal.run/v1/annotate",
+            json={
+                "image": {"image_base64": base64_image},
+                "prompt": prompt
+            },
+            timeout=120  # 2 minute timeout for evaluation
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error making request to API: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse response
+    try:
+        result = response.json()
         
-except json.JSONDecodeError as e:
-    print(f"Error parsing JSON response: {e}", file=sys.stderr)
-    print(f"Response text: {response.text}", file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    print(f"Error processing response: {e}", file=sys.stderr)
-    print(json.dumps(result, indent=2) if 'result' in locals() else "No result available")
-    sys.exit(1)
+        if "annotation" in result:
+            annotation = result["annotation"]
+            
+            # Extract rating
+            rating = extract_rating(annotation)
+            
+            if rating is not None:
+                # Output JSON with rating and full analysis
+                output = {
+                    "rating": rating,
+                    "analysis": annotation,
+                    "reference_description": reference_description,
+                    "image_path": image_path
+                }
+                print(json.dumps(output, indent=2))
+            else:
+                # If we can't extract a rating, output the full response
+                print("Warning: Could not extract rating from response", file=sys.stderr)
+                output = {
+                    "rating": None,
+                    "analysis": annotation,
+                    "raw_response": annotation,
+                    "reference_description": reference_description,
+                    "image_path": image_path
+                }
+                print(json.dumps(output, indent=2))
+        else:
+            # Unexpected response format
+            print("Error: Unexpected response format", file=sys.stderr)
+            print(json.dumps(result, indent=2))
+            sys.exit(1)
+            
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON response: {e}", file=sys.stderr)
+        print(f"Response text: {response.text}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error processing response: {e}", file=sys.stderr)
+        print(json.dumps(result, indent=2) if 'result' in locals() else "No result available")
+        sys.exit(1)
