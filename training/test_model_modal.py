@@ -144,7 +144,22 @@ Return only the JavaScript code without markdown formatting. [/INST]"""
             
             inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
             with torch.no_grad():
-                outputs = model.generate(**inputs, max_new_tokens=512, temperature=0.7)
+                # Clear CUDA cache before generation to free up memory
+                torch.cuda.empty_cache()
+                
+                outputs = model.generate(
+                    **inputs, 
+                    max_new_tokens=2048,  # Reduced to avoid OOM - can generate ~1500-2000 lines of code
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    # Memory-efficient generation settings
+                    use_cache=True,  # Use KV cache to reduce memory
+                )
+                
+                # Clear cache after generation
+                torch.cuda.empty_cache()
             full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
             
             if "[/INST]" in full_response:
@@ -164,8 +179,16 @@ Return only the JavaScript code without markdown formatting. [/INST]"""
             temp_dir = tempfile.mkdtemp()
             screenshot_path = os.path.join(temp_dir, "screenshot.jpg")
             
+            # Use local Three.js files from pipeline directory (not CDN)
+            pipeline_dir = "/root/project/pipeline"
+            
             try:
-                asyncio.run(load_and_render_threejs(generated_code, screenshot_path, project_dir=temp_dir))
+                asyncio.run(load_and_render_threejs(
+                    generated_code, 
+                    screenshot_path, 
+                    project_dir=temp_dir,
+                    pipeline_dir=pipeline_dir
+                ))
                 
                 # Check if screenshot was created
                 if not os.path.exists(screenshot_path):

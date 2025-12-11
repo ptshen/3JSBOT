@@ -108,14 +108,50 @@ window.{var_name} = {var_name};
         if regular_exports:
             # Handle named/default imports
             unique_exports = list(set(regular_exports))
-            exports_str = ', '.join(unique_exports)
             
-            addons_code += f"""
+            # Check if this is a default import (single export, typically for modules like Stats)
+            # For default imports, we need to handle them differently
+            if len(unique_exports) == 1 and module_path.endswith('stats.module.js'):
+                # Stats.js uses default export
+                export_name = unique_exports[0]
+                addons_code += f"""
+// Load {module_path} (default export)
+try {{
+    const {module_name}Module = await import('{import_path}');
+    const {export_name} = {module_name}Module.default || {module_name}Module.Stats || {module_name}Module;
+    window.{export_name} = {export_name};
+}} catch (e) {{
+    console.warn('Failed to load {module_path}:', e);
+    // Create a dummy class to prevent errors
+    window.{export_name} = class {export_name} {{
+        constructor() {{}}
+        load() {{ return Promise.resolve(null); }}
+    }};
+}}
+
+"""
+            else:
+                # Named imports - try to destructure
+                exports_str = ', '.join(unique_exports)
+                addons_code += f"""
 // Load {module_path}
-const {module_name}Module = await import('{import_path}');
-const {{ {exports_str} }} = {module_name}Module;
-// Make exports available globally
-{chr(10).join([f'window.{exp} = {exp};' for exp in unique_exports])}
+try {{
+    const {module_name}Module = await import('{import_path}');
+    // Try named exports first, fallback to default
+    let {exports_str};
+    if ({module_name}Module.{unique_exports[0]} !== undefined) {{
+        ({exports_str}) = {module_name}Module;
+    }} else {{
+        // Default export - assign to first export name
+        {unique_exports[0]} = {module_name}Module.default || {module_name}Module;
+    }}
+    // Make exports available globally
+    {chr(10).join([f'window.{exp} = {exp};' for exp in unique_exports])}
+}} catch (e) {{
+    console.warn('Failed to load {module_path}:', e);
+    // Create dummy classes to prevent errors
+    {chr(10).join([f'window.{exp} = class {exp} {{ constructor() {{}} load() {{ return Promise.resolve(null); }} }};' for exp in unique_exports])}
+}}
 
 """
     
@@ -129,7 +165,8 @@ window.OrbitControls = OrbitControls;
 
 """
     
-    if re.search(r'\b(new\s+)?Stats\b', processed_code, re.IGNORECASE) and 'Stats' not in addons_code:
+    # Check if Stats is used but not loaded (fallback detection)
+    if re.search(r'\b(new\s+)?Stats\b', processed_code, re.IGNORECASE) and 'Stats' not in addons_code and 'stats' not in addons_code.lower():
         addons_code += """
 // Load Stats.js (detected usage without import)
 try {
@@ -145,6 +182,7 @@ try {
         showPanel() {}
         begin() {}
         end() {}
+        update() {}
     };
 }
 
@@ -260,14 +298,18 @@ setTimeout(() => {
     return wrapped_code
 
 
-def create_html_file(js_code: str, output_dir: str, pipeline_dir: str = None) -> str:
+def create_html_file(js_code: str, output_dir: str, pipeline_dir: str = None, build_parent_dir: str = None) -> str:
     """
     Create an HTML file using local Three.js files from the pipeline directory.
     Uses import map to reference local build and jsm directories.
     
+    Directory structure matches import map:
+    - build/ is one directory above index.html (../build/three.module.js)
+    - jsm/ is in the same directory as index.html (./jsm/)
+    
     Args:
         js_code: The processed JavaScript code
-        output_dir: Directory where HTML file will be created
+        output_dir: Directory where HTML file will be created (this becomes the project subdirectory)
         pipeline_dir: Directory containing build/ and jsm/ folders (default: None, uses script's parent)
     
     Returns:
@@ -283,26 +325,60 @@ def create_html_file(js_code: str, output_dir: str, pipeline_dir: str = None) ->
     else:
         pipeline_dir = os.path.abspath(pipeline_dir)
     
-    # Copy build and jsm directories to output_dir if they don't exist
-    build_src = os.path.join(pipeline_dir, "build")
-    jsm_src = os.path.join(pipeline_dir, "jsm")
-    build_dst = os.path.join(output_dir, "build")
-    jsm_dst = os.path.join(output_dir, "jsm")
+    # Create directory structure to match import map:
+    # parent_dir/
+    #   build/          (one level up from index.html)
+    #   project_dir/   (output_dir - same level as build/)
+    #     index.html
+    #     jsm/          (same directory as index.html)
+    #     textures/
+    #     models/
+    #     ...
     
-    if os.path.exists(build_src) and not os.path.exists(build_dst):
+    # Determine where to copy build directory
+    # If build_parent_dir is provided, use it (build/ goes at root of temp_dir)
+    # Otherwise, use parent of output_dir
+    if build_parent_dir:
+        build_dst_dir = build_parent_dir
+    else:
+        build_dst_dir = os.path.dirname(output_dir)
+        if not build_dst_dir or build_dst_dir == output_dir:
+            build_dst_dir = os.path.dirname(os.path.abspath(output_dir))
+    
+    # Ensure build destination directory exists
+    os.makedirs(build_dst_dir, exist_ok=True)
+    
+    # Copy build directory to build_dst_dir (one level up from index.html)
+    build_src = os.path.join(pipeline_dir, "build")
+    build_dst = os.path.join(build_dst_dir, "build")
+    
+    if os.path.exists(build_src):
+        if os.path.exists(build_dst):
+            # Remove existing build directory to ensure clean copy
+            shutil.rmtree(build_dst)
         print(f"Copying build directory from {build_src} to {build_dst}...")
         shutil.copytree(build_src, build_dst)
     
-    if os.path.exists(jsm_src) and not os.path.exists(jsm_dst):
+    # Copy jsm directory to output_dir (same directory as index.html)
+    jsm_src = os.path.join(pipeline_dir, "jsm")
+    jsm_dst = os.path.join(output_dir, "jsm")
+    
+    if os.path.exists(jsm_src):
+        if os.path.exists(jsm_dst):
+            # Remove existing jsm directory to ensure clean copy
+            shutil.rmtree(jsm_dst)
         print(f"Copying jsm directory from {jsm_src} to {jsm_dst}...")
         shutil.copytree(jsm_src, jsm_dst)
     
-    # Copy asset directories that might be referenced in the code (textures, models, sounds, etc.)
+    # Copy asset directories to output_dir (same directory as index.html)
     asset_dirs = ["textures", "models", "sounds", "fonts", "files", "luts", "ies", "materialx", "screenshots"]
     for asset_dir in asset_dirs:
         asset_src = os.path.join(pipeline_dir, asset_dir)
         asset_dst = os.path.join(output_dir, asset_dir)
-        if os.path.exists(asset_src) and not os.path.exists(asset_dst):
+        if os.path.exists(asset_src):
+            if os.path.exists(asset_dst):
+                # Remove existing directory to ensure clean copy
+                shutil.rmtree(asset_dst)
             print(f"Copying {asset_dir} directory from {asset_src} to {asset_dst}...")
             shutil.copytree(asset_src, asset_dst)
     
@@ -310,12 +386,12 @@ def create_html_file(js_code: str, output_dir: str, pipeline_dir: str = None) ->
     processed_js = process_js_code(js_code)
     
     # Create HTML using local Three.js files with import map
-    # Import map uses relative paths: "./build/three.module.js" and "./jsm/"
+    # Import map matches the official Three.js examples format
     # Use json.dumps to ensure valid JSON in the import map
     import json
     import_map = {
         "imports": {
-            "three": "./build/three.module.js",
+            "three": "../build/three.module.js",
             "three/addons/": "./jsm/"
         }
     }
@@ -471,7 +547,15 @@ async def load_and_render_threejs(
         project_dir: Directory where files will be created (default: None, uses temp dir)
         pipeline_dir: Directory containing build/ and jsm/ folders (default: None, uses script's parent)
     """
-    # Create output directory
+    # Create directory structure:
+    # temp_dir/
+    #   build/              (at root - one level above index.html)
+    #   project_subdir/     (subdirectory for index.html and assets)
+    #     index.html
+    #     jsm/
+    #     textures/
+    #     ...
+    
     if project_dir:
         if os.path.exists(project_dir):
             import shutil
@@ -483,21 +567,37 @@ async def load_and_render_threejs(
         temp_dir = tempfile.mkdtemp(prefix="threejs_")
         cleanup_dir = True
 
+    # Create project subdirectory inside temp_dir for index.html and assets
+    project_subdir = os.path.join(temp_dir, "project")
+    os.makedirs(project_subdir, exist_ok=True)
+
     httpd = None
     
     try:
-        print(f"Creating HTML file in {temp_dir}...")
+        print(f"Creating project structure:")
+        print(f"  Root directory: {temp_dir}")
+        print(f"  Project subdirectory: {project_subdir}")
         
         # Determine pipeline directory if not provided
         if pipeline_dir is None:
             pipeline_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Create HTML file with embedded JavaScript and copy build/jsm directories
-        html_path = create_html_file(js_code, temp_dir, pipeline_dir=pipeline_dir)
+        # build/ will be copied to temp_dir (root), jsm/ and assets to project_subdir
+        html_path = create_html_file(js_code, project_subdir, pipeline_dir=pipeline_dir, build_parent_dir=temp_dir)
         print(f"HTML file created: {html_path}")
         
-        # Start HTTP server
-        print("Starting HTTP server...")
+        # Verify HTML file exists
+        if not os.path.exists(html_path):
+            raise FileNotFoundError(f"HTML file was not created at {html_path}")
+        
+        # Verify the file is in the expected location
+        expected_html_path = os.path.join(project_subdir, "index.html")
+        if html_path != expected_html_path:
+            print(f"Warning: HTML path mismatch. Expected: {expected_html_path}, Got: {html_path}")
+        
+        # Start HTTP server from temp_dir (root) so ../build/ resolves correctly
+        print(f"Starting HTTP server from root directory: {temp_dir}...")
         httpd, server_url = start_http_server(temp_dir)
         print(f"HTTP server ready at {server_url}")
         
@@ -520,9 +620,11 @@ async def load_and_render_threejs(
             page.on('console', log_console)
             page.on('pageerror', lambda err: print(f"Page error: {err}"))
             
-            # Load the page
-            html_url = f"{server_url}/index.html"
+            # Load the page - use the project subdirectory path
+            # The server serves from temp_dir, so /project/index.html accesses temp_dir/project/index.html
+            html_url = f"{server_url}/project/index.html"
             print(f"Loading page: {html_url}")
+            print(f"  (File should be at: {html_path})")
             try:
                 await page.goto(html_url, wait_until='networkidle', timeout=30000)
             except Exception as e:

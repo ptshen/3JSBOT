@@ -1,186 +1,98 @@
 import * as THREE from 'three';
 
+			import Stats from 'three/addons/libs/stats.module.js';
+
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-			import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-			let camera, scene, renderer;
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+			import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+			import { GLTFAnimationPointerExtension } from '@needle-tools/three-animation-pointer';
 
-			let scene2, renderer2;
+			let mixer;
 
-			const frustumSize = 500;
+			const clock = new THREE.Clock();
+			const container = document.getElementById( 'container' );
 
-			init();
-			animate();
+			const stats = new Stats();
+			container.appendChild( stats.dom );
 
-			function init() {
+			const renderer = new THREE.WebGLRenderer( { antialias: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			container.appendChild( renderer.domElement );
 
-				const aspect = window.innerWidth / window.innerHeight;
-				camera = new THREE.OrthographicCamera( frustumSize * aspect / - 2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / - 2, 1, 1000 );
+			const pmremGenerator = new THREE.PMREMGenerator( renderer );
 
-				camera.position.set( - 200, 200, 200 );
+			const scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0xbfe3dd );
+			scene.environment = pmremGenerator.fromScene( new RoomEnvironment(), 0.04 ).texture;
 
-				scene = new THREE.Scene();
-				scene.background = new THREE.Color( 0xf0f0f0 );
+			const camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, .2, 100 );
+			camera.position.set( - 3, 2, 6 );
 
-				scene2 = new THREE.Scene();
+			const controls = new OrbitControls( camera, renderer.domElement );
+			controls.target.set( 0, 0.5, 0 );
+			controls.update();
+			controls.enablePan = false;
+			controls.enableDamping = true;
 
-				const material = new THREE.MeshBasicMaterial( { color: 0x000000, wireframe: true, wireframeLinewidth: 1, side: THREE.DoubleSide } );
+			const dracoLoader = new DRACOLoader();
+			dracoLoader.setDecoderPath( 'jsm/libs/draco/gltf/' );
+			
 
-				// left
-				createPlane(
-					100, 100,
-					'chocolate',
-					new THREE.Vector3( - 50, 0, 0 ),
-					new THREE.Euler( 0, - 90 * THREE.MathUtils.DEG2RAD, 0 )
-				);
-				// right
-				createPlane(
-					100, 100,
-					'saddlebrown',
-					new THREE.Vector3( 0, 0, 50 ),
-					new THREE.Euler( 0, 0, 0 )
-				);
-				// top
-				createPlane(
-					100, 100,
-					'yellowgreen',
-					new THREE.Vector3( 0, 50, 0 ),
-					new THREE.Euler( - 90 * THREE.MathUtils.DEG2RAD, 0, 0 )
-				);
-				// bottom
-				createPlane(
-					300, 300,
-					'seagreen',
-					new THREE.Vector3( 0, - 50, 0 ),
-					new THREE.Euler( - 90 * THREE.MathUtils.DEG2RAD, 0, 0 )
-				);
+			const ktx2Loader = new KTX2Loader()
+				.setTranscoderPath( 'jsm/libs/basis/' )
+				.detectSupport( renderer );
 
-				//
+			const loader = new GLTFLoader();
+			loader.setDRACOLoader( dracoLoader );
+			loader.setKTX2Loader( ktx2Loader );
 
-				renderer = new THREE.WebGLRenderer();
-				renderer.setPixelRatio( window.devicePixelRatio );
-				renderer.setSize( window.innerWidth, window.innerHeight );
-				document.body.appendChild( renderer.domElement );
+			loader.register( p => {
 
-				renderer2 = new CSS3DRenderer();
-				renderer2.setSize( window.innerWidth, window.innerHeight );
-				renderer2.domElement.style.position = 'absolute';
-				renderer2.domElement.style.top = 0;
-				document.body.appendChild( renderer2.domElement );
+				return new GLTFAnimationPointerExtension( p );
 
-				const controls = new OrbitControls( camera, renderer2.domElement );
-				controls.minZoom = 0.5;
-				controls.maxZoom = 2;
+			} );
 
-				function createPlane( width, height, cssColor, pos, rot ) {
+			loader.load( 'https://cloud.needle.tools/-/assets/Z23hmXB27L6Db-optimized/file', function ( gltf ) {
 
-					const element = document.createElement( 'div' );
-					element.style.width = width + 'px';
-					element.style.height = height + 'px';
-					element.style.opacity = 0.75;
-					element.style.background = cssColor;
+				const model = gltf.scene;
+				scene.add( model );
 
-					const object = new CSS3DObject( element );
-					object.position.copy( pos );
-					object.rotation.copy( rot );
-					scene2.add( object );
+				mixer = new THREE.AnimationMixer( model );
+				mixer.clipAction( gltf.animations[ 0 ] ).play();
 
-					const geometry = new THREE.PlaneGeometry( width, height );
-					const mesh = new THREE.Mesh( geometry, material );
-					mesh.position.copy( object.position );
-					mesh.rotation.copy( object.rotation );
-					scene.add( mesh );
+				renderer.setAnimationLoop( animate );
 
-				}
+			}, undefined, function ( e ) {
 
-				window.addEventListener( 'resize', onWindowResize );
-				createPanel();
+				console.error( e );
 
-			}
+			} );
 
-			function onWindowResize() {
 
-				const aspect = window.innerWidth / window.innerHeight;
+			window.onresize = function () {
 
-				camera.left = - frustumSize * aspect / 2;
-				camera.right = frustumSize * aspect / 2;
-				camera.top = frustumSize / 2;
-				camera.bottom = - frustumSize / 2;
-
+				camera.aspect = window.innerWidth / window.innerHeight;
 				camera.updateProjectionMatrix();
 
 				renderer.setSize( window.innerWidth, window.innerHeight );
 
-				renderer2.setSize( window.innerWidth, window.innerHeight );
+			};
 
-			}
 
 			function animate() {
 
-				requestAnimationFrame( animate );
+				const delta = clock.getDelta();
+
+				mixer.update( delta );
+
+				controls.update();
+
+				stats.update();
 
 				renderer.render( scene, camera );
-				renderer2.render( scene2, camera );
-
-			}
-
-			function createPanel() {
-
-				const panel = new GUI();
-				const folder1 = panel.addFolder( 'camera setViewOffset' ).close();
-
-				const settings = {
-					'setViewOffset'() {
-
-						folder1.children[ 1 ].enable().setValue( window.innerWidth );
-						folder1.children[ 2 ].enable().setValue( window.innerHeight );
-						folder1.children[ 3 ].enable().setValue( 0 );
-						folder1.children[ 4 ].enable().setValue( 0 );
-						folder1.children[ 5 ].enable().setValue( window.innerWidth );
-						folder1.children[ 6 ].enable().setValue( window.innerHeight );
-
-					},
-					'fullWidth': 0,
-					'fullHeight': 0,
-					'offsetX': 0,
-					'offsetY': 0,
-					'width': 0,
-					'height': 0,
-					'clearViewOffset'() {
-
-						folder1.children[ 1 ].setValue( 0 ).disable();
-						folder1.children[ 2 ].setValue( 0 ).disable();
-						folder1.children[ 3 ].setValue( 0 ).disable();
-						folder1.children[ 4 ].setValue( 0 ).disable();
-						folder1.children[ 5 ].setValue( 0 ).disable();
-						folder1.children[ 6 ].setValue( 0 ).disable();
-						camera.clearViewOffset();
-
-					}
-				};
-
-				folder1.add( settings, 'setViewOffset' );
-				folder1.add( settings, 'fullWidth', window.screen.width / 4, window.screen.width * 2, 1 ).onChange( ( val ) => updateCameraViewOffset( { fullWidth: val } ) ).disable();
-				folder1.add( settings, 'fullHeight', window.screen.height / 4, window.screen.height * 2, 1 ).onChange( ( val ) => updateCameraViewOffset( { fullHeight: val } ) ).disable();
-				folder1.add( settings, 'offsetX', 0, 256, 1 ).onChange( ( val ) => updateCameraViewOffset( { x: val } ) ).disable();
-				folder1.add( settings, 'offsetY', 0, 256, 1 ).onChange( ( val ) => updateCameraViewOffset( { y: val } ) ).disable();
-				folder1.add( settings, 'width', window.screen.width / 4, window.screen.width * 2, 1 ).onChange( ( val ) => updateCameraViewOffset( { width: val } ) ).disable();
-				folder1.add( settings, 'height', window.screen.height / 4, window.screen.height * 2, 1 ).onChange( ( val ) => updateCameraViewOffset( { height: val } ) ).disable();
-				folder1.add( settings, 'clearViewOffset' );
-
-			}
-
-			function updateCameraViewOffset( { fullWidth, fullHeight, x, y, width, height } ) {
-
-				if ( ! camera.view ) {
-
-					camera.setViewOffset( fullWidth || window.innerWidth, fullHeight || window.innerHeight, x || 0, y || 0, width || window.innerWidth, height || window.innerHeight );
-
-				} else {
-
-					camera.setViewOffset( fullWidth || camera.view.fullWidth, fullHeight || camera.view.fullHeight, x || camera.view.offsetX, y || camera.view.offsetY, width || camera.view.width, height || camera.view.height );
-
-				}
 
 			}
