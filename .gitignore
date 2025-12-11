@@ -1,2 +1,7 @@
 *.env
 milestone/
+Milestone.txt
+NLP_Project_Milestone.pdf
+
+# Evaluation outputs (screenshots, generated code, etc.)
+evaluation_outputs/
