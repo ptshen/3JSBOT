@@ -1,0 +1,27 @@
+Experiment Condition	System Errors	Syntax Errors	Visual/Spatial (any)	Spatial Hallucinations	Conceptual Failures	Faithfulness Errors	Other/Unknown Visual
+baseline-temp0	0	0	5	0	0	0	5
+chain-of-thought	0	0	4	0	0	0	4
+codellama-7b	0	5	6	0	0	0	6
+combined	0	0	10	0	0	0	10
+fewshot	1	0	7	0	0	0	7
+gemini-2-5-flash_baseline	5	0	0	0	0	0	0
+gemini_temp0	7	18	7	0	0	0	7
+gpt_oss_120b_temp0	20	0	0	0	0	0	0
+improved-prompt	0	0	6	0	0	0	6
+llama33_70b_temp0	20	0	0	0	0	0	0
+meta-llama-llama-3-1-70b-instruct-turbo_baseline	0	10	0	0	0	0	0
+plan-then-code	0	0	4	0	0	0	4
+self-refine	0	0	7	0	0	0	7
+
+8.1 Taxonomy of Failures
+We conducted a post-hoc error analysis on the bottom 20% of generated examples, classifying them
+into three categories:
+1. Syntax Errors (Black Screen): Prevalent in the Base model, which often hallucinated non-
+existent Three.js methods (e.g., scene.addBox() instead of scene.add(mesh)). Fine-
+tuning reduced this by over 60%.
+2. Conceptual Failures (The "Red Box" Problem): The model generates code that runs, but
+substitutes complex objects (e.g., "car") with simple primitives (e.g., a single cube). This
+indicates a lack of geometric vocabulary in the small 7B model.
+3. Spatial Hallucinations: Components are generated but detached (e.g., wheels floating above
+the car). Chain-of-Thought prompting showed the most promise here, as the "Planning" step
+forced the model to explicitly state: "The wheels should be at y=0, the body at y=1"
